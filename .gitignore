@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+vectors.json
+ai-service/.venv/
+ai-service/.env
+backend/node_modules/
+backend/dist/
+backend/.env
