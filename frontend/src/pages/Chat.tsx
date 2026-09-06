@@ -55,6 +55,10 @@ export default function Chat() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
+  const setCurrentId = (id: string | null) => {
+    activeIdRef.current = id;
+    setActiveId(id);
+  };
   const [selectedCitation, setSelectedCitation] = useState<number | null>(null);
   // Confidence floor on the strongest evidence; below it the guardrail
   // answers the canonical "I don't know." instead of a weak match. Off by
@@ -63,6 +67,17 @@ export default function Chat() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
+  // Synchronous in-flight guard. `busy` state updates are async — a rapid
+  // double activation (Enter held down, or Enter + click in the same tick)
+  // can both pass a `busy === false` check before React re-renders, firing
+  // two SSE streams and persisting the same message twice. A ref is set
+  // (and read) synchronously so the second call bails immediately.
+  const busyRef = useRef(false);
+  // Current conversation id mirrored in a ref so an in-flight send persists
+  // against the freshest value instead of a stale render-time closure. This
+  // stops a doubled first message from spawning a second brand-new
+  // conversation when the closure captured `activeId === null`.
+  const activeIdRef = useRef<string | null>(null);
 
   // load conversation list once
   useEffect(() => {
@@ -71,7 +86,7 @@ export default function Chat() {
 
   // load messages when a conversation is selected
   const loadConversation = useCallback(async (id: string) => {
-    setActiveId(id);
+    setCurrentId(id);
     setStreams([]);
     setPersistedMessages([]);
     setError(null);
@@ -84,26 +99,39 @@ export default function Chat() {
   }, []);
 
   const newChat = async () => {
-    setActiveId(null);
+    setCurrentId(null);
     setPersistedMessages([]);
     setStreams([]);
     setError(null);
     inputRef.current?.focus();
   };
 
-  const persistNewConversation = useCallback(async (text: string) => {
-    const created = await conversationsApi.create();
-    setActiveId(created.id);
-    setConversations((prev) => [created, ...prev]);
-    return conversationsApi.addMessage(created.id, text);
-  }, []);
+  const persistNewConversation = useCallback(
+    async (
+      text: string,
+      assistant: {
+        content: string;
+        refused: boolean;
+        provider: string;
+        model: string;
+        citations: Citation[];
+        usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+      }
+    ) => {
+      const created = await conversationsApi.create();
+      setCurrentId(created.id);
+      setConversations((prev) => [created, ...prev]);
+      return conversationsApi.addMessage(created.id, text, assistant);
+    },
+    []
+  );
 
   const deleteChat = async (id: string) => {
     if (!confirm("Delete this conversation?")) return;
     await conversationsApi.remove(id);
     setConversations((prev) => prev.filter((c) => c.id !== id));
     if (activeId === id) {
-      setActiveId(null);
+      setCurrentId(null);
       setPersistedMessages([]);
     }
   };
@@ -114,7 +142,10 @@ export default function Chat() {
 
   const ask = async () => {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || busyRef.current) return;
+    // set the synchronous lock immediately — the `busy` state below won't be
+    // visible to a second activation until React re-renders
+    busyRef.current = true;
     setInput("");
     setError(null);
 
@@ -150,15 +181,26 @@ export default function Chat() {
         })
       );
 
-      // persist to conversation; auto-create one when this is the first message
+      // persist the exact answer the user just read; auto-create a
+      // conversation on the first message
       if (done) {
-        const updated = activeId
-          ? await conversationsApi.addMessage(activeId, text)
-          : await persistNewConversation(text);
-        const lastAsst = (updated.messages ?? [])
-          .filter((m) => m.role === "assistant")
-          .pop();
+        const assistant = {
+          content: done.answer,
+          refused: done.refused,
+          provider: done.provider,
+          model: done.model,
+          citations: done.citations,
+          usage: done.usage,
+        };
+        const updated = activeIdRef.current
+          ? await conversationsApi.addMessage(activeIdRef.current, text, assistant)
+          : await persistNewConversation(text, assistant);
         setPersistedMessages(updated.messages ?? []);
+        // the turn now lives in persistedMessages — drop the streamed copy
+        // so the question isn't rendered twice
+        setStreams((prev) =>
+          prev.filter((e) => !(e.question === text && !e.streaming))
+        );
         // refresh the sidebar so it reflects server ordering (updated_at DESC)
         conversationsApi
           .list({ limit: 100 })
@@ -175,6 +217,7 @@ export default function Chat() {
       );
     } finally {
       setBusy(false);
+      busyRef.current = false;
       abortRef.current = null;
       inputRef.current?.focus();
     }
@@ -268,7 +311,7 @@ export default function Chat() {
           {activeId && (
             <button
               onClick={() => {
-                setActiveId(null);
+                setCurrentId(null);
                 setPersistedMessages([]);
               }}
               className="ml-auto p-1.5 rounded text-muted-foreground hover:bg-accent"

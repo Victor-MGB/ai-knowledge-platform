@@ -130,6 +130,47 @@ export const getConversationSchema = {
   response: { 200: conversationObject },
 } as const;
 
+/** Optional pre-generated assistant turn — the answer the caller already
+ *  streamed via /rag/generate/stream, persisted verbatim so the transcript
+ *  matches what the user read (no second RAG pass on the server). */
+const assistantTurnObject = {
+  type: "object",
+  additionalProperties: false,
+  required: ["content"],
+  properties: {
+    content: { type: "string", minLength: 1, maxLength: 8000 },
+    refused: { type: "boolean" },
+    provider: { type: "string" },
+    model: { type: "string" },
+    citations: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id"],
+        additionalProperties: false,
+        properties: {
+          id: { type: "integer" },
+          title: { type: ["string", "null"] },
+          section: { type: ["string", "null"] },
+          page: { type: ["integer", "null"] },
+          chunkId: { type: ["string", "null"] },
+          documentId: { type: ["string", "null"] },
+          similarity: { type: ["number", "null"] },
+        },
+      },
+    },
+    usage: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        promptTokens: { type: "integer" },
+        completionTokens: { type: "integer" },
+        totalTokens: { type: "integer" },
+      },
+    },
+  },
+} as const;
+
 export const addMessageSchema = {
   params: conversationIdParams,
   body: {
@@ -139,6 +180,7 @@ export const addMessageSchema = {
     properties: {
       content: { type: "string", minLength: 1, maxLength: 4000, pattern: "\\S" },
       rag: ragOptionsObject,
+      assistant: assistantTurnObject,
     },
   },
   response: { 201: conversationObject },
@@ -161,5 +203,23 @@ export interface AddMessageInput {
     minScore?: number;
     sourceType?: "pdf" | "docx" | "md" | "html" | "txt";
     metadata?: Record<string, string | number | boolean>;
+  };
+  /** Pre-generated assistant turn to persist verbatim instead of re-running
+   *  RAG on the server (the streaming UI already generated the answer). */
+  assistant?: {
+    content: string;
+    refused?: boolean;
+    provider?: string;
+    model?: string;
+    citations?: {
+      id: number;
+      title?: string | null;
+      section?: string | null;
+      page?: number | null;
+      chunkId?: string | null;
+      documentId?: string | null;
+      similarity?: number | null;
+    }[];
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   };
 }

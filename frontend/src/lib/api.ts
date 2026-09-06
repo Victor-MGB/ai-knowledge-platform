@@ -337,10 +337,25 @@ export const conversationsApi = {
       body: JSON.stringify({ title }),
     }),
 
-  addMessage: (id: string, content: string) =>
+  addMessage: (
+    id: string,
+    content: string,
+    assistant?: {
+      content: string;
+      refused: boolean;
+      provider: string;
+      model: string;
+      citations: Citation[];
+      usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+    },
+  ) =>
     api<Conversation>(`/api/v1/conversations/${id}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content, rag: {} }),
+      body: JSON.stringify({
+        content,
+        rag: {},
+        ...(assistant ? { assistant } : {}),
+      }),
     }),
 
   remove: (id: string) =>

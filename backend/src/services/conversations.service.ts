@@ -12,7 +12,7 @@ import {
   type MessageRow,
 } from "../database/repositories/conversation.repository.js";
 import { AppError } from "../utils/errors.js";
-import type { RagOptions, RagService } from "./rag.service.js";
+import type { RagOptions, RagResponse, RagService } from "./rag.service.js";
 
 export interface ConversationView {
   id: string;
@@ -44,6 +44,24 @@ export interface MessageView {
 export interface AddMessageInput {
   content: string;
   rag: RagOptions;
+  /** Pre-generated assistant turn from the streaming UI, persisted verbatim
+   *  instead of re-running RAG on the server. */
+  assistant?: {
+    content: string;
+    refused?: boolean;
+    provider?: string;
+    model?: string;
+    citations?: {
+      id: number;
+      title?: string | null;
+      section?: string | null;
+      page?: number | null;
+      chunkId?: string | null;
+      documentId?: string | null;
+      similarity?: number | null;
+    }[];
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  };
 }
 
 /** Whether a message content string is non-blank (route validation enforces a
@@ -158,22 +176,57 @@ export class ConversationsService {
       throw new AppError("NOT_FOUND", "conversation not found", 404);
     }
 
-    // Day-20 conversation memory: the prior turns (before this question),
-    // trimmed to a bounded window, become the history the RAG pipeline rewrites
-    // referential follow-ups against and ships to generation.
-    const priorMessages = (await listMessagesByConversation(this.db, conversationId)).map(
-      toMessageView
-    );
-    const history = buildHistoryWindow(priorMessages, {
-      maxMessages: this.maxHistoryMessages,
-      maxTokens: this.maxHistoryTokens,
-    });
+    // The streaming UI already generated this turn — persist it verbatim so
+    // the transcript matches exactly what the user read, with no second RAG
+    // pass (which would produce a divergent answer and charge a duplicate
+    // generation). Otherwise run the RAG pipeline as before.
+    let generation: {
+      answer: string;
+      refused: boolean;
+      provider: string;
+      model: string;
+      citations: RagResponse["citations"];
+      usage: RagResponse["usage"];
+    };
+    if (input.assistant?.content) {
+      generation = {
+        answer: input.assistant.content,
+        refused: input.assistant.refused ?? false,
+        provider: input.assistant.provider ?? "",
+        model: input.assistant.model ?? "",
+        citations: (input.assistant.citations ?? []).map((c) => ({
+          id: c.id,
+          title: c.title ?? null,
+          section: c.section ?? null,
+          page: c.page ?? null,
+          chunkId: c.chunkId ?? null,
+          documentId: c.documentId ?? null,
+          similarity: c.similarity ?? null,
+        })),
+        usage: {
+          promptTokens: input.assistant.usage?.promptTokens ?? 0,
+          completionTokens: input.assistant.usage?.completionTokens ?? 0,
+          totalTokens: input.assistant.usage?.totalTokens ?? 0,
+        },
+      };
+    } else {
+      // Day-20 conversation memory: the prior turns (before this question),
+      // trimmed to a bounded window, become the history the RAG pipeline
+      // rewrites referential follow-ups against and ships to generation.
+      const priorMessages = (await listMessagesByConversation(this.db, conversationId)).map(
+        toMessageView
+      );
+      const history = buildHistoryWindow(priorMessages, {
+        maxMessages: this.maxHistoryMessages,
+        maxTokens: this.maxHistoryTokens,
+      });
 
-    const generation = await this.rag.generate(organizationId, userId, input.content, {
-      ...input.rag,
-      history,
-      maxContextTokens: input.rag.maxContextTokens ?? this.defaultMaxContextTokens,
-    });
+      generation = await this.rag.generate(organizationId, userId, input.content, {
+        ...input.rag,
+        history,
+        maxContextTokens: input.rag.maxContextTokens ?? this.defaultMaxContextTokens,
+      });
+    }
 
     // Persist user + assistant as one atomic unit with exact ordering. The
     // assistant message's payload carries the citation provenance so a client

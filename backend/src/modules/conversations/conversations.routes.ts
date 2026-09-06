@@ -70,6 +70,7 @@ export const conversationRoutes: FastifyPluginAsync = async (app) => {
         {
           content: body.content,
           rag: body.rag ?? {},
+          assistant: body.assistant,
         }
       );
       return reply.code(201).send(conversation);
