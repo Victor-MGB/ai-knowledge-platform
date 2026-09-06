@@ -91,6 +91,13 @@ export default function Chat() {
     inputRef.current?.focus();
   };
 
+  const persistNewConversation = useCallback(async (text: string) => {
+    const created = await conversationsApi.create();
+    setActiveId(created.id);
+    setConversations((prev) => [created, ...prev]);
+    return conversationsApi.addMessage(created.id, text);
+  }, []);
+
   const deleteChat = async (id: string) => {
     if (!confirm("Delete this conversation?")) return;
     await conversationsApi.remove(id);
@@ -143,16 +150,19 @@ export default function Chat() {
         })
       );
 
-      // persist to conversation if one is active
-      if (done && activeId) {
-        const updated = await conversationsApi.addMessage(activeId, text);
+      // persist to conversation; auto-create one when this is the first message
+      if (done) {
+        const updated = activeId
+          ? await conversationsApi.addMessage(activeId, text)
+          : await persistNewConversation(text);
         const lastAsst = (updated.messages ?? [])
           .filter((m) => m.role === "assistant")
           .pop();
         setPersistedMessages(updated.messages ?? []);
-        setConversations((prev) =>
-          prev.map((c) => (c.id === activeId ? updated : c))
-        );
+        // refresh the sidebar so it reflects server ordering (updated_at DESC)
+        conversationsApi
+          .list({ limit: 100 })
+          .then((r) => setConversations(r.items));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Something went wrong";
