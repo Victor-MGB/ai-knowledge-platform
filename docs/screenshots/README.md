@@ -56,6 +56,29 @@ session state in-memory (no credentials are stored) and writes `*.png` here.
 # products land in docs/screenshots/ as *.png
 ```
 
+## Demo video (live screen recording)
+
+Records the app + **Grafana** + **Prometheus** together: the stream pulls
+questions, the dashboard refreshes live, and `http_requests_total` ticks in
+Prometheus as two final questions fire. Requires ffmpeg, a recordable X
+display (headless box: `Xvfb :99`), and playwright with headful chromium.
+
+```bash
+# 1. full stack up already (frontend :80, grafana :3001, prometheus :9090)
+
+# 2. new tenant seeded automatically; or reuse one:
+#    export KNOWFLOW_DEMO_EMAIL=... KNOWFLOW_DEMO_PASSWORD=...
+
+# 3. record (runs ffmpeg, drives the browser, stops ffmpeg):
+docs/screenshots/make_demo_video.sh docs/screenshots/live-demo.mp4
+
+# products land in docs/screenshots/live-demo.mp4
+```
+
+Driving timeline lives in
+[`capture_demo_video.py`](capture_demo_video.py); the ~2-minute clip is what
+the README `## Demo video` section links as `docs/screenshots/live-demo.mp4`.
+
 ## Wiring into the README
 
 Drop the files as `docs/screenshots/*.png` and reference them from the README

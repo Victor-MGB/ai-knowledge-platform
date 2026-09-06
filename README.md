@@ -430,10 +430,18 @@ setup and the shot list are in
 
 ## Demo video
 
-A ~3-minute walkthrough covering login → upload → READY → search → cited
-answer → refusal → Grafana. The exact script is outlined in
-[`docs/screenshots/README.md`](docs/screenshots/README.md). The live demo
-behind the video is reproducible with `tests/e2e/demo.py`.
+A ~2-minute live screen recording of the product **and** its observability:
+login → cited RAG answer → honest refusal (via the chat's *Refuse weak
+matches* toggle) → more activity → the provisioned **Grafana** dashboard
+refreshing live → the **Prometheus** expression browser where
+`http_requests_total` ticks up in real time as questions fire.
+
+The clip is reproducible end-to-end with
+[`docs/screenshots/make_demo_video.sh`](docs/screenshots/make_demo_video.sh)
+(with the compose stack up and ffmpeg + a recordable X display); the exact
+ruling timeline is in
+[`docs/screenshots/capture_demo_video.py`](docs/screenshots/capture_demo_video.py).
+The 14-question live demo behind it is `tests/e2e/demo.py`.
 
 ---
 
