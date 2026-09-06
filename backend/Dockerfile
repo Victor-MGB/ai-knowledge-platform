@@ -14,5 +14,9 @@ WORKDIR /srv
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /srv/dist ./dist
+# Fresh-DB bootstrap (see migrate.mjs): base schema + incremental deltas.
+COPY migrate.mjs ./migrate.mjs
+COPY bootstrap.sql ./bootstrap.sql
+COPY src/database/migrations ./migrations
 EXPOSE 3000
 CMD ["node", "dist/server.js"]

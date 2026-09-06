@@ -30,6 +30,9 @@ export function createPool(config: Config): pg.Pool {
     connectionTimeoutMillis: 2500,
     query_timeout: 2500,
     idleTimeoutMillis: 30_000,
+    ssl: config.DB_SSL
+      ? { rejectUnauthorized: false }
+      : undefined,
   });
 }
 

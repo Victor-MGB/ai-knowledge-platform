@@ -1,0 +1,146 @@
+# KnowFlow — Render Blueprint.
+#
+#   Blueprints → New Blueprint Instance → this repo → render.yaml
+#
+# Creates: managed Postgres (pgvector), managed Redis, and four Docker
+# services (backend, ai-service, worker, frontend). No managed object store
+# exists on Render, so file storage uses an S3-compatible bucket — set the
+# S3_* values below to Cloudflare R2 or Backblaze B2 credentials
+# (S3_FORCE_PATH_STYLE must be "false" for both).
+#
+# Cost/lifetime notes: free Postgres & Redis instances EXPIRE after 30 days;
+# free web services spin down after ~15 min idle. Paid "Starter" removes both.
+#
+# The ai-service runs fully offline by default (hash embeddings + extractive
+# RAG — no model downloads, no API keys). Flip embedding_provider/rag_provider
+# to "openai" and add OPENAI_API_KEY if you want a real model.
+
+services:
+  # ---------------------------------------------------------------- data -----
+  - type: pgsql
+    name: knowflow-postgres
+    plan: free
+    databaseName: knowflow
+    user: knowflow
+
+  - type: redis
+    name: knowflow-redis
+    plan: free
+    maxmemoryPolicy: noeviction
+
+  # --------------------------------------------------------- backend --------
+  - type: web
+    name: knowflow-backend
+    runtime: docker
+    plan: free
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    startCommand: sh -c "node migrate.mjs && node dist/server.js"
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: knowflow-postgres
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AI_SERVICE_URL
+        fromService:
+          name: knowflow-ai-service
+          type: web
+          property: url
+      - key: S3_REGION
+        value: auto            # R2: "auto"; B2: your bucket's region
+      - key: S3_ENDPOINT
+        value: https://<accountid>.r2.cloudflarestorage.com   # SET ME
+      - key: S3_BUCKET
+        value: knowflow        # SET ME: create the bucket first
+      - key: S3_ACCESS_KEY
+        value: changeme        # SET ME
+      - key: S3_SECRET_KEY
+        value: changeme        # SET ME
+      - key: S3_FORCE_PATH_STYLE
+        value: "false"
+
+  # ------------------------------------------------- ai-service ------------
+  - type: web
+    name: knowflow-ai-service
+    runtime: docker
+    plan: free
+    rootDir: ai-service
+    dockerfilePath: Dockerfile
+    startCommand: sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: knowflow-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromRedis:
+          name: knowflow-redis
+          property: connectionString
+      - key: S3_REGION
+        value: auto
+      - key: S3_ENDPOINT
+        value: https://<accountid>.r2.cloudflarestorage.com   # SET ME
+      - key: S3_BUCKET
+        value: knowflow        # SET ME
+      - key: S3_ACCESS_KEY
+        value: changeme        # SET ME
+      - key: S3_SECRET_KEY
+        value: changeme        # SET ME
+      - key: S3_FORCE_PATH_STYLE
+        value: "false"
+      # defaults keep it offline-friendly; add OPENAI_API_KEY to go real:
+      - key: embedding_provider
+        value: hash
+      - key: rag_provider
+        value: extract
+
+  # ------------------------------------------------- background worker ------
+  - type: worker
+    name: knowflow-worker
+    runtime: docker
+    plan: free
+    rootDir: "."
+    dockerfilePath: worker/Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: knowflow-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromRedis:
+          name: knowflow-redis
+          property: connectionString
+      - key: S3_REGION
+        value: auto
+      - key: S3_ENDPOINT
+        value: https://<accountid>.r2.cloudflarestorage.com   # SET ME
+      - key: S3_BUCKET
+        value: knowflow        # SET ME
+      - key: S3_ACCESS_KEY
+        value: changeme        # SET ME
+      - key: S3_SECRET_KEY
+        value: changeme        # SET ME
+      - key: S3_FORCE_PATH_STYLE
+        value: "false"
+
+  # ------------------------------------------------------------- frontend ----
+  - type: web
+    name: knowflow-frontend
+    runtime: docker
+    plan: free
+    rootDir: frontend
+    dockerfilePath: Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: BACKEND_URL
+        fromService:
+          name: knowflow-backend
+          type: web
+          property: url
+      # PORT is injected by Render automatically (nginx.conf.template listens on it)

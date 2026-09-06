@@ -12,11 +12,17 @@ const envSchema = z
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
+    // Managed Postgres usually hands over a single DATABASE_URL; when present it
+    // wins over the classic DB_* fields (which are still used by tests).
+    DATABASE_URL: z.string().optional(),
     DB_HOST: z.string().default("localhost"),
     DB_PORT: z.coerce.number().int().positive().default(5434),
     DB_USER: z.string().default("knowflow"),
     DB_PASSWORD: z.string().default("knowflow"),
     DB_NAME: z.string().default("knowflow"),
+    // Managed Postgres (Render/Railway) requires TLS; driven by DB_SSL=true or a
+    // `?sslmode=require` (or `verify`) query parameter on DATABASE_URL.
+    DB_SSL: z.coerce.boolean().default(false),
     JWT_SECRET: z.string().min(16).default(DEV_JWT_SECRET),
     JWT_ISSUER: z.string().default("knowflow"),
     JWT_EXPIRES_IN: z.string().default("15m"),
@@ -76,10 +82,35 @@ const envSchema = z
     }
   });
 
+/** Parse a postgres://user:pass@host:port/db URL into DB_* fields. */
+function databaseUrlOverrides(url: string | undefined): Partial<Record<string, string>> {
+  if (!url) return {};
+  const match = url.match(
+    /^postgres(?:ql)?:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/([^?]+)/
+  );
+  if (!match) {
+    throw new Error(`DATABASE_URL is not a postgres:// URL: ${url}`);
+  }
+  const [, user, password, host, port, database] = match;
+  return {
+    DB_USER: decodeURIComponent(user ?? ""),
+    DB_PASSWORD: decodeURIComponent(password ?? ""),
+    DB_HOST: host,
+    DB_PORT: port,
+    DB_NAME: decodeURIComponent(database ?? ""),
+  };
+}
+
 export type Config = z.infer<typeof envSchema>;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const parsed = envSchema.safeParse(env);
+  const merged: NodeJS.ProcessEnv = { ...env };
+  Object.assign(merged, databaseUrlOverrides(env.DATABASE_URL));
+  const wantsTls =
+    merged.DB_SSL === undefined &&
+    /sslmode=(require|verify)/.test(env.DATABASE_URL ?? "");
+  if (wantsTls) merged.DB_SSL = "true";
+  const parsed = envSchema.safeParse(merged);
   if (!parsed.success) {
     const details = JSON.stringify(parsed.error.issues, null, 2);
     throw new Error(`invalid environment configuration:\n${details}`);
