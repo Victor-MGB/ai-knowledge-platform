@@ -1,0 +1,240 @@
+# KnowFlow CI/CD — one pipeline for every push / pull request.
+#
+#   push ──► lint ──► tests (backend + ai)  ──► build ──► docker ──► deploy
+#                          │  build (static)
+#
+# The pipeline mirrors the local dev verification: backend + AI suites run
+# against the same compose-backed Postgres/MinIO/Redis the developer uses, so
+# a green CI means the same thing as a green laptop.
+#
+# The `deploy` job is dormant until you configure secrets:
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_DIR
+# It then rsyncs the repo and runs `docker compose up --build` on the target
+# (always executed on `main`; never on PRs).
+
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # compose maps Postgres/MinIO/Redis to these host ports; the backend + AI
+  # configs default to exactly these, so tests hit the compose containers.
+  DB_HOST: 127.0.0.1
+  DB_PORT: 5434
+  DB_USER: knowflow
+  DB_PASSWORD: knowflow
+  DB_NAME: knowflow
+  S3_ENDPOINT: http://127.0.0.1:9000
+  S3_BUCKET: knowflow
+  S3_ACCESS_KEY: knowflow
+  S3_SECRET_KEY: knowflow123
+  S3_FORCE_PATH_STYLE: "true"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Backend — typecheck + build
+        working-directory: backend
+        run: |
+          npm ci
+          npm run typecheck
+
+      - name: Frontend — oxlint + typecheck
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npx tsc -b
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: AI service + evaluation — ruff
+        working-directory: ai-service
+        run: |
+          pip install ruff
+          ruff check --select E4,E9,F63,F7,F82,E711,E712,F821 app tests ../evaluation
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Backend — emit dist
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Frontend — production bundle
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: AI service — bytecode compile check
+        working-directory: ai-service
+        run: |
+          pip install -r requirements.txt
+          python -m compileall -q app ../evaluation
+
+  tests-backend:
+    name: Tests — backend
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start compose data stores (Postgres+pgvector, Redis, MinIO)
+        run: |
+          docker compose up -d postgres redis minio
+          docker compose run --rm minio-init
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Run backend suite
+        working-directory: backend
+        run: |
+          npm ci
+          npm test
+
+      - name: Down compose
+        run: docker compose down --volumes --remove-orphans
+
+  tests-ai:
+    name: Tests — ai-service
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start compose data stores
+        run: |
+          docker compose up -d postgres redis minio
+          docker compose run --rm minio-init
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run ai-service suite
+        working-directory: ai-service
+        run: |
+          pip install -r requirements.txt
+          pytest
+
+      - name: Down compose
+        run: docker compose down --volumes --remove-orphans
+
+  docker:
+    name: Docker — build + smoke
+    runs-on: ubuntu-latest
+    needs: [build, tests-backend, tests-ai]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: docker compose config --quiet
+
+      - name: Build images
+        run: docker compose build backend ai-service frontend worker
+
+      - name: Boot the stack
+        run: |
+          docker compose up -d --build postgres redis minio
+          docker compose run --rm minio-init
+          docker compose up -d --build --wait backend frontend ai-service worker prometheus grafana
+
+      - name: Smoke — frontend serves the SPA
+        run: |
+          curl -fsS -o /dev/null --retry 10 --retry-delay 2 http://localhost/
+          echo "frontend OK"
+
+      - name: Smoke — nginx proxies the backend (404 envelope = auth required)
+        run: |
+          BODY=$(curl -fsS --retry 10 --retry-delay 2 -w '\n%{http_code}' http://localhost/api/v1/does-not-exist)
+          echo "$BODY" | grep -Ev '^$' | head -1
+          echo "$BODY" | tail -1 | grep -E '404'
+
+      - name: Smoke — metrics endpoints are scrapable
+        run: |
+          curl -fsS --retry 10 --retry-delay 2 http://localhost:9090/api/v1/status/buildinfo > /dev/null
+          sleep 20
+          CDATA=$(curl -fsS 'http://localhost:9090/api/v1/query?query=count(http_requests_total)' | grep -oE '"value":\[[^,]+,[^]]+\]' | tail -1)
+          echo "prometheus sees http_requests_total (backend + ai): $CDATA"
+
+      - name: Teardown
+        run: docker compose down --volumes --remove-orphans
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: docker
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH + docker compose
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DEPLOY_HOST:-}" || -z "${DEPLOY_USER:-}" || -z "${DEPLOY_SSH_KEY:-}" ]]; then
+            echo "::notice title=deploy skipped::set DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (and DEPLOY_DIR) secrets to activate SSH deployment"
+            exit 0
+          fi
+
+          DIR="${DEPLOY_DIR:-/srv/knowflow}"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          chmod 600 "$RUNNER_TEMP/deploy_key"
+          ssh-keyscan -H "$DEPLOY_HOST" >> "$RUNNER_TEMP/known_hosts" 2>/dev/null
+
+          ARGS="ssh -i $RUNNER_TEMP/deploy_key -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          ssh $ARGS "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p $DIR"
+          rsync -az --delete -e "$ARGS" \
+            docker-compose.yml .dockerignore infrastructure backend ai-service frontend worker \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DIR/"
+          ssh $ARGS "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd $DIR && docker compose up -d --build --remove-orphans && docker compose ps"

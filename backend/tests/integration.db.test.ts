@@ -35,15 +35,21 @@ itDb("reaches the real Postgres and reports its version", async () => {
   }
 });
 
-itDb("/health against the real database is healthy", async () => {
-  const { buildApp } = await import("../src/app.js");
-  const app = await buildApp();
-  try {
-    const response = await app.inject({ method: "GET", url: "/health" });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().status).toBe("healthy");
-    expect(response.json().db.version).toContain("PostgreSQL");
-  } finally {
-    await app.close();
-  }
-});
+itDb(
+  "/health against the real database is healthy",
+  async () => {
+    const { buildApp } = await import("../src/app.js");
+    const app = await buildApp();
+    try {
+      const response = await app.inject({ method: "GET", url: "/health" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().status).toBe("healthy");
+      expect(response.json().db.version).toContain("PostgreSQL");
+    } finally {
+      await app.close();
+    }
+  },
+  // Cold ESM import + full app assembly under serial suite load runs slower
+  // than the 5s vitest default; give the live-DB probe breathing room.
+  30_000
+);

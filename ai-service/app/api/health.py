@@ -10,6 +10,7 @@ def health(request: Request) -> HealthResponse:
     settings = request.app.state.settings
     embedding = request.app.state.embedding_service
     llm = request.app.state.llm_service
+    rag = request.app.state.rag_service
     return HealthResponse(
         status="ok",
         version=settings.app_version,
@@ -21,5 +22,6 @@ def health(request: Request) -> HealthResponse:
                 dimensions=embedding.dimensions,
             ),
             "llm": ServiceStatus(provider=llm.provider_name, model=llm.model),
+            "rag": ServiceStatus(provider=rag.provider_name, model=rag.model),
         },
     )

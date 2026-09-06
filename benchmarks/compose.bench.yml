@@ -1,0 +1,12 @@
+# Benchmark-only compose override: lifts the shipped API rate limits so the
+# load runs measure the product's latency/throughput, not its intentional
+# throttling. Use with: docker compose -f docker-compose.yml -f benchmarks/compose.bench.yml up -d
+# The shipped defaults (100 req/60s general, 10 req/60s auth, per IP) remain
+# the production posture and are themselves a Day-33 observation.
+services:
+  backend:
+    environment:
+      AUTH_RATE_LIMIT_MAX: "1000000"
+      AUTH_RATE_LIMIT_WINDOW_MS: "60000"
+      RATE_LIMIT_MAX: "1000000"
+      RATE_LIMIT_TIME_WINDOW_MS: "60000"

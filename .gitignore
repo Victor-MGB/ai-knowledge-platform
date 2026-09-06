@@ -2,9 +2,15 @@ __pycache__/
 *.pyc
 .venv/
 .env
-vectors.json
 ai-service/.venv/
 ai-service/.env
+ai-service/.pytest_cache/
+ai-service/.ruff_cache/
 backend/node_modules/
 backend/dist/
 backend/.env
+tests/e2e/fixtures/demo/
+benchmarks/corpus/
+benchmarks/corpus1000/
+.pytest_cache/
+.ruff_cache/

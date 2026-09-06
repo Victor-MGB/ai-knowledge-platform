@@ -1,0 +1,17 @@
+{
+  "base": "http://localhost:80",
+  "concurrent": 8,
+  "queries": 20,
+  "search_latency_ms": {
+    "n": 20,
+    "mean_ms": 111.5,
+    "p50_ms": 100.3,
+    "p90_ms": 209.5,
+    "p95_ms": 248.0,
+    "p99_ms": 248.0,
+    "max_ms": 248.0
+  },
+  "wall_s": 2.48,
+  "qps": 8.1,
+  "results_per_query": 5.0
+}

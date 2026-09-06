@@ -3,6 +3,10 @@ import os
 
 os.environ["EMBEDDING_PROVIDER"] = "hash"
 os.environ["LLM_PROVIDER"] = "mock"
+# queue tests enqueue + drain real RQ jobs; run them on a dedicated Redis
+# logical DB so a live `docker compose` worker watching db 0 (queue
+# `knowflow`) can never consume or interfere with test jobs.
+os.environ["REDIS_URL"] = "redis://127.0.0.1:6375/1"
 
 import pytest
 from starlette.testclient import TestClient

@@ -1,6 +1,7 @@
 import type { FastifyRequest, preHandlerHookHandler } from "fastify";
 
 import { AppError } from "../utils/errors.js";
+import { atLeast, type OrgRole } from "./roles.js";
 
 /** Gate for authenticated endpoints: verifies the Bearer access token and
  * confirms it is an access token for a known subject. */
@@ -20,6 +21,17 @@ export const requireRole =
   (role: string): preHandlerHookHandler =>
   async (request: FastifyRequest) => {
     if (request.user?.role !== role && request.user?.role !== "owner") {
+      throw new AppError("FORBIDDEN", "insufficient permissions", 403);
+    }
+  };
+
+/** Day 22 — hierarchy gate: the caller's role must be at least `minimum`.
+ *  Implements OWNER > ADMIN > MEMBER > VIEWER so a route can require "admin or
+ *  stronger" without enumerating roles. Owners always clear every level. */
+export const requireAtLeast =
+  (minimum: OrgRole): preHandlerHookHandler =>
+  async (request: FastifyRequest) => {
+    if (!atLeast(request.user?.role ?? "", minimum)) {
       throw new AppError("FORBIDDEN", "insufficient permissions", 403);
     }
   };

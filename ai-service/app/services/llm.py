@@ -4,9 +4,11 @@ Mirror image of the embedding layer: LLMService talks to an LLMProvider chosen
 by configuration. The mock provider keeps the whole service functional and
 testable offline; the OpenAI-compatible provider switches in a real completion
 endpoint (including OPENAI_BASE_URL for local/bridge servers like llama.cpp).
+
+Day 27: ``complete_stream`` yields tokens one-by-one for SSE streaming.
 """
 
-from typing import Protocol
+from typing import Generator, Protocol
 
 import httpx
 
@@ -21,6 +23,8 @@ class LLMProvider(Protocol):
     model: str
 
     def complete(self, messages: list[Message], temperature: float) -> CompletionResult: ...
+
+    def complete_stream(self, messages: list[Message], temperature: float) -> Generator[str, None, None]: ...
 
 
 class MockLLMProvider:
@@ -52,6 +56,10 @@ class MockLLMProvider:
                 total_tokens=prompt_tokens + completion_tokens,
             ),
         )
+
+    def complete_stream(self, messages: list[Message], temperature: float) -> Generator[str, None, None]:
+        result = self.complete(messages, temperature)
+        yield result.reply
 
 
 class OpenAILLMProvider:
@@ -87,6 +95,38 @@ class OpenAILLMProvider:
             finish_reason=choice.get("finish_reason", "stop"),
         )
 
+    def complete_stream(self, messages: list[Message], temperature: float) -> Generator[str, None, None]:
+        """Stream tokens from the OpenAI-compatible API via SSE."""
+        import json as _json
+
+        with httpx.stream(
+            "POST",
+            f"{self.base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True,
+            },
+            timeout=120,
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                payload = line[6:]
+                if payload.strip() == "[DONE]":
+                    break
+                try:
+                    chunk = _json.loads(payload)
+                except _json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                content = delta.get("content")
+                if content:
+                    yield content
+
 
 class LLMService:
     def __init__(self, provider: LLMProvider):
@@ -102,3 +142,6 @@ class LLMService:
 
     def complete(self, messages: list[Message], temperature: float = 0.0) -> CompletionResult:
         return self.provider.complete(messages, temperature)
+
+    def complete_stream(self, messages: list[Message], temperature: float = 0.0) -> Generator[str, None, None]:
+        yield from self.provider.complete_stream(messages, temperature)

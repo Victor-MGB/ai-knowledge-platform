@@ -1,0 +1,26 @@
+{
+  "users": 8,
+  "searches_each": 3,
+  "search_latency_ms": {
+    "n": 24,
+    "mean_ms": 260.1,
+    "p50_ms": 204.4,
+    "p90_ms": 555.4,
+    "p95_ms": 569.7,
+    "p99_ms": 718.0,
+    "max_ms": 718.0
+  },
+  "rag_latency_ms": {
+    "n": 24,
+    "mean_ms": 271.1,
+    "p50_ms": 248.2,
+    "p90_ms": 408.2,
+    "p95_ms": 534.4,
+    "p99_ms": 745.9,
+    "max_ms": 745.9
+  },
+  "wall_s": 1.7,
+  "search_qps": 14.1,
+  "rag_qps": 14.1,
+  "failed": 0
+}

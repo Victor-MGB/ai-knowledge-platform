@@ -94,3 +94,54 @@ export const meSchema = {
     200: userObject,
   },
 } as const;
+
+export const acceptInvitationSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    required: ["token", "password"],
+    properties: {
+      token: { type: "string", minLength: 64, maxLength: 64 },
+      password: { type: "string", minLength: 8, maxLength: 128 },
+    },
+  },
+  response: {
+    201: {
+      type: "object",
+      required: ["invitation", "user", "organization"],
+      properties: {
+        invitation: {
+          type: "object",
+          required: ["id", "email", "role", "status", "expiresAt", "createdAt"],
+          properties: {
+            id: { type: "string" },
+            email: { type: "string" },
+            role: { type: "string" },
+            status: { type: "string" },
+            expiresAt: { type: "string" },
+            createdAt: { type: "string" },
+          },
+        },
+        user: {
+          type: "object",
+          required: ["id", "email", "role"],
+          properties: {
+            id: { type: "string" },
+            email: { type: "string" },
+            role: { type: "string" },
+          },
+        },
+        organization: {
+          type: "object",
+          required: ["id", "name", "slug", "memberCount"],
+          properties: {
+            id: { type: "string" },
+            name: { type: "string" },
+            slug: { type: "string" },
+            memberCount: { type: "integer" },
+          },
+        },
+      },
+    },
+  },
+} as const;

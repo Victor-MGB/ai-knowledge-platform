@@ -1,0 +1,11 @@
+{
+  "file": "large_doc.pdf",
+  "size_bytes": 254618,
+  "pages": 190,
+  "upload_ms": 623.5,
+  "process_ms": "25578.2",
+  "embed_ms": "6622.4",
+  "total_to_ready_s": 32.5,
+  "ms_per_page": "134.62",
+  "stage": "ready"
+}

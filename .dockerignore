@@ -1,0 +1,18 @@
+# Repo-root docker build context (worker/). Keep the context lean and stable.
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+.git/
+.github/
+docs/
+benchmarks/
+tests/
+evaluation/
+node_modules/
+*/node_modules/
+backend/dist/
+frontend/dist/
+*.log
+.gitignore

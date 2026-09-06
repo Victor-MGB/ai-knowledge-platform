@@ -30,3 +30,14 @@ export async function findOrganizationBySlug(
   );
   return rows[0] as OrganizationRow | undefined;
 }
+
+export async function findOrganizationById(
+  db: Executable,
+  id: string
+): Promise<OrganizationRow | undefined> {
+  const { rows } = await db.query(
+    "SELECT id, name, slug FROM organizations WHERE id = $1",
+    [id]
+  );
+  return rows[0] as OrganizationRow | undefined;
+}

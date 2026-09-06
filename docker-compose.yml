@@ -1,0 +1,259 @@
+# KnowFlow — full stack, one command.
+#
+#   docker compose up --build
+#
+# starts: frontend (nginx) -> backend -> ai-service -> worker, backed by
+# PostgreSQL + pgvector, Redis, and MinIO. Everything is reachable on the
+# default `knowflow` network by service name. Dev-appropriate defaults below;
+# harden the secrets before deploying anywhere real.
+
+services:
+  # --- Data stores ---------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: knowflow
+      POSTGRES_PASSWORD: knowflow
+      POSTGRES_DB: knowflow
+    volumes:
+      # Schema + triggers applied on first init only (fresh data volume).
+      # Postgres 18 images expect a single mount at /var/lib/postgresql.
+      - ./infrastructure/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - pgdata:/var/lib/postgresql
+    ports:
+      # Host-visible for local tooling (matches the historical dev port).
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowflow -d knowflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6375:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: knowflow
+      MINIO_ROOT_PASSWORD: knowflow123
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Create the `knowflow` bucket MinIO serves the backend/worker against.
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 knowflow knowflow123; do
+        echo 'waiting for minio...'; sleep 2;
+      done;
+      mc mb --ignore-existing local/knowflow;
+      echo 'bucket ready';
+      "
+    restart: "no"
+
+  # --- Application servers ------------------------------------------------
+  ai-service:
+    image: knowflow-ai-service
+    build: ./ai-service
+    environment:
+      ENVIRONMENT: production
+      # embeddings/LLMs default to offline mock/hash providers.
+      EMBEDDING_PROVIDER: hash
+      LLM_PROVIDER: mock
+      RAG_PROVIDER: extract
+      # connect to the compose Postgres/MinIO/Redis.
+      DATABASE_URL: postgres://knowflow:knowflow@postgres:5432/knowflow
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: knowflow
+      S3_ACCESS_KEY: knowflow
+      S3_SECRET_KEY: knowflow123
+      S3_FORCE_PATH_STYLE: "true"
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: knowflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    # First-class worker image: same ai-service code, but built from a repo-root
+    # context so it can scale independently of the API server (worker/README.md).
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    image: knowflow-worker
+    command: ["python", "-m", "app.queue.worker"]
+    environment:
+      ENVIRONMENT: production
+      EMBEDDING_PROVIDER: hash
+      LLM_PROVIDER: mock
+      RAG_PROVIDER: extract
+      DATABASE_URL: postgres://knowflow:knowflow@postgres:5432/knowflow
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: knowflow
+      S3_ACCESS_KEY: knowflow
+      S3_SECRET_KEY: knowflow123
+      S3_FORCE_PATH_STYLE: "true"
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: knowflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    expose:
+      # 8000 serves the app; 8001 is the worker's own Prometheus endpoint.
+      - "8000"
+      - "8001"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      JWT_SECRET: knowflow-db0fe7cf12a32e970d49019c08e8d872
+      JWT_ISSUER: knowflow
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: knowflow
+      DB_PASSWORD: knowflow
+      DB_NAME: knowflow
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: knowflow
+      S3_ACCESS_KEY: knowflow
+      S3_SECRET_KEY: knowflow123
+      S3_FORCE_PATH_STYLE: "true"
+      AI_SERVICE_URL: http://ai-service:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      ai-service:
+        condition: service_started
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # --- Frontend (nginx, serves the SPA + proxies /api, /auth, /stream) ----
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+  # --- Observability (Day 30) ----------------------------------------------
+  # Scrapes /metrics from backend (3000), ai-service (8000) and the RQ worker
+  # (8001); Grafana serves the provisioned dashboard on http://localhost:3001.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./infrastructure/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      backend:
+        condition: service_started
+      ai-service:
+        condition: service_started
+      worker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    environment:
+      # demo-accessible: anonymous read access to the provisioned dashboard
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/knowflow.json
+    volumes:
+      - ./infrastructure/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  miniodata:

@@ -1,6 +1,5 @@
-# syntax=docker/dockerfile:1
-
-FROM node:20-slim AS build
+# KnowFlow backend — multi-stage build.
+FROM node:22-slim AS build
 WORKDIR /srv
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -8,7 +7,8 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:20-slim AS runtime
+# Runtime image — lean, no toolchain.
+FROM node:22-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /srv
 COPY package.json package-lock.json ./

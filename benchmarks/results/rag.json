@@ -1,0 +1,12 @@
+{
+  "rag_generate_latency_ms": {
+    "n": 10,
+    "mean_ms": 35.5,
+    "p50_ms": 34.5,
+    "p90_ms": 46.0,
+    "p95_ms": 46.0,
+    "p99_ms": 46.0,
+    "max_ms": 46.0
+  },
+  "refused": 0
+}

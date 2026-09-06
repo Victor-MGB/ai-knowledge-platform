@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -12,4 +12,5 @@ COPY app ./app
 
 EXPOSE 8000
 
+# Default: run the FastAPI server (override command for the worker).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
