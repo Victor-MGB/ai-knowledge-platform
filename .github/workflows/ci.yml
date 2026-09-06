@@ -189,7 +189,7 @@ jobs:
 
       - name: Smoke — nginx proxies the backend (404 envelope = auth required)
         run: |
-          BODY=$(curl -fsS --retry 10 --retry-delay 2 -w '\n%{http_code}' http://localhost/api/v1/does-not-exist)
+          BODY=$(curl -sS --retry 10 --retry-delay 2 -w '\n%{http_code}' http://localhost/api/v1/does-not-exist)
           echo "$BODY" | grep -Ev '^$' | head -1
           echo "$BODY" | tail -1 | grep -E '404'
 
